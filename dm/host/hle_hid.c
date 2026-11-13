@@ -13,6 +13,12 @@
 #include <stdatomic.h>
 #include "dm_cursor.h"
 #include <math.h>
+#include <mach/mach.h>
+#include "dm_rumble_probe.h"
+#include "dm_rumble_d.h"
+#ifdef DM_ANDROID_RUMBLE_D
+#include "dm_rumble_stream.h"
+#endif
 _Atomic int g_dm_l_presses;
 
 enum { NPAD_HANDHELD = 0x20 };
@@ -444,13 +450,173 @@ HLE_FORCE("_ZN2nn3hid15GetNpadStyleSetERKj", "手柄样式查询；跟 DM_OPMODE
 HLE_FORCE("_ZN2nn3hid12GetNpadStateEPNS0_16NpadFullKeyStateERKj", "全键手柄状态；取 dm_input", void, h_hid_GetFullKey, NpadState *s, const uint32_t *id) { fill(s, *id, STYLE_FULLKEY); }
 HLE_FORCE("_ZN2nn3hid12GetNpadStateEPNS0_17NpadHandheldStateERKj", "掌机手柄状态；取 dm_input", void, h_hid_GetHandheld, NpadState *s, const uint32_t *id) { fill(s, *id, STYLE_HANDHELD); }
 
-// 震动：设备数 0，游戏不会再初始化 / 发送
-// Vibration: device count 0, the game will not initialize / send any further
-HLE_FORCE("_ZN2nn3hid20IsVibrationPermittedEv", "震动许可；宿主不支持（返回 bool）", unsigned, h_hid_VibPermit, void) { return 0; }
+// 震动：A 保持原行为；B 按匹配 SDK 枚举虚拟句柄，只记录，永不连接平台马达。
+// Rumble: A preserves behavior; B enumerates virtual handles using the matching SDK ABI, logging only and never connecting platform motors.
+static _Atomic unsigned rumble_issued, rumble_initialized;
+static pthread_mutex_t rumble_monitor_lock = PTHREAD_MUTEX_INITIALIZER;
+#ifdef DM_ANDROID_RUMBLE_D
+static rd_state rumble_d_state;
+static uint64_t rumble_d_owner;
+enum { rumble_active_on = 1 };
+static rt_state rumble_active_stream;
+static uint64_t rumble_shadow_stamp[4];
+#endif
+
+
+
+
+static int rumble_mode(void) {
+#ifdef DM_ANDROID_RUMBLE_D
+    return RP_MODE_D;
+#else
+    return RP_OFF;
+#endif
+}
+#ifdef DM_ANDROID_RUMBLE_D
+int dm_rumble_d_mode(void) { return rumble_mode()==RP_MODE_D; }
+// Only the owning Java controller may select the experimental output queue.
+
+
+uint64_t dm_rumble_d_claim(void) {
+    pthread_mutex_lock(&rumble_monitor_lock);
+    if (!++rumble_d_owner) ++rumble_d_owner;
+    if (rumble_active_on) rt_reset(&rumble_active_stream,rumble_d_owner,0);
+    if (rumble_active_on) memset(rumble_shadow_stamp,0,sizeof rumble_shadow_stamp);
+    rd_reset(&rumble_d_state,0);uint64_t owner=rumble_d_owner;
+    pthread_mutex_unlock(&rumble_monitor_lock);return owner;
+}
+int dm_rumble_shadow_stamp(uint64_t owner,int64_t out[4]) {
+    pthread_mutex_lock(&rumble_monitor_lock);
+    int ok=rumble_active_on && owner && owner==rumble_d_owner && rumble_shadow_stamp[0]==owner;
+    if (ok) memcpy(out,rumble_shadow_stamp,sizeof rumble_shadow_stamp);
+    pthread_mutex_unlock(&rumble_monitor_lock);return ok;
+}
+unsigned dm_rumble_active_peek(uint64_t owner,int64_t out[RT_WORDS]) {
+    pthread_mutex_lock(&rumble_monitor_lock);
+    unsigned n=rumble_active_on?rt_peek(&rumble_active_stream,owner,now_ns(),out):0;
+    pthread_mutex_unlock(&rumble_monitor_lock);return n;
+}
+void dm_rumble_d_gate(uint64_t owner,int enabled) {
+    pthread_mutex_lock(&rumble_monitor_lock);
+    if (owner && owner==rumble_d_owner) {
+        rd_reset(&rumble_d_state,enabled && dm_rumble_d_mode());
+        if (rumble_active_on) rt_reset(&rumble_active_stream,owner,rumble_d_state.enabled);
+        if (rumble_active_on) memset(rumble_shadow_stamp,0,sizeof rumble_shadow_stamp);
+    }
+    pthread_mutex_unlock(&rumble_monitor_lock);
+}
+int dm_rumble_d_poll(uint64_t owner,int64_t out[RD_WORDS]) {
+    pthread_mutex_lock(&rumble_monitor_lock);
+    int ok=owner && owner==rumble_d_owner && dm_rumble_d_mode();
+    if (ok) {
+        rd_poll(&rumble_d_state,owner,now_ns(),connected_id()==0?3:connected_id()==0x20?12:0,out);
+        if (rumble_active_on) {
+            rumble_shadow_stamp[0]=owner;rumble_shadow_stamp[1]=rumble_active_stream.epoch;
+            rumble_shadow_stamp[2]=rumble_active_stream.sequence;rumble_shadow_stamp[3]=(uint64_t)out[1];
+        }
+    }
+    pthread_mutex_unlock(&rumble_monitor_lock);return ok;
+}
+// The raw-v1 poll remains the only peak consumer. This sidecar identifies its exact event prefix.
+
+// Active has its own bounded reader; the diagnostic consumer cannot steal its prefix.
+
+int dm_rumble_active_commit(uint64_t owner,uint64_t epoch,uint64_t first,unsigned n) {
+    pthread_mutex_lock(&rumble_monitor_lock);
+    int ok=rumble_active_on && rt_commit(&rumble_active_stream,owner,epoch,first,n);
+    pthread_mutex_unlock(&rumble_monitor_lock);return ok;
+}
+unsigned dm_rumble_active_poll(uint64_t owner,int64_t raw[RD_WORDS],int64_t stamp[4],int64_t batch[RT_WORDS]) {
+    pthread_mutex_lock(&rumble_monitor_lock);
+    unsigned n=0;
+    if(rumble_active_on && owner && owner==rumble_d_owner) {
+        rd_poll(&rumble_d_state,owner,now_ns(),connected_id()==0?3:connected_id()==0x20?12:0,raw);
+        rumble_shadow_stamp[0]=owner;rumble_shadow_stamp[1]=rumble_active_stream.epoch;
+        rumble_shadow_stamp[2]=rumble_active_stream.sequence;rumble_shadow_stamp[3]=(uint64_t)raw[1];
+        memcpy(stamp,rumble_shadow_stamp,sizeof rumble_shadow_stamp);
+        n=rt_peek(&rumble_active_stream,owner,now_ns(),batch);
+    }
+    pthread_mutex_unlock(&rumble_monitor_lock);return n;
+}
+// Independent diagnostic transport. No D1 snapshot reads/peak consumption here.
+
+
+
+#endif
+
+
+
+
+
+static int rumble_read(const void *src, void *dst, size_t size) {
+    vm_size_t got = 0;
+    return vm_read_overwrite(mach_task_self(), (vm_address_t)(uintptr_t)src, size,
+                            (vm_address_t)(uintptr_t)dst, &got) == KERN_SUCCESS && got == size;
+}
+// 内核代写可恢复失败，不直接解引用不可信的客体输出指针。
+// Kernel-mediated writes fail recoverably instead of directly dereferencing untrusted guest output pointers.
+static int rumble_write(void *dst, const void *src, size_t size) {
+#if defined(__ANDROID__) || defined(__OHOS__)
+    struct iovec local = {(void *)src, size}, remote = {dst, size};
+    return syscall(__NR_process_vm_writev, getpid(), &local, 1ul, &remote, 1ul, 0ul) == (ssize_t)size;
+#else
+    return vm_write(mach_task_self(), (vm_address_t)(uintptr_t)dst, (vm_offset_t)(uintptr_t)src,
+                    (mach_msg_type_number_t)size) == KERN_SUCCESS;
+#endif
+}
+static unsigned rumble_bit(uint32_t handle) {
+    uint32_t id = connected_id();
+    return rp_handle_bit(handle, id, style_of(id));
+}
+// Every B send is safely copied and classified, including calls after RP_LIMIT.
+// Only bounded event output and a consistent five-second snapshot leave the lock.
+static void rumble_send_observe(const void *h,const void *v) {
+    rp_record r={0};
+    pthread_mutex_lock(&rumble_monitor_lock);
+    r.time_ns=now_ns();
+    r.handle_ok=h && rumble_read(h,&r.handle,sizeof r.handle);
+    r.value_ok=v && rumble_read(v,&r.value,sizeof r.value);
+    if(r.value_ok) { memcpy(r.raw,&r.value,sizeof r.raw);r.value_valid=rp_valid_value(r.value); }
+    unsigned bit=r.handle_ok?rumble_bit(r.handle):0;
+    int issued=!!(bit & atomic_load(&rumble_issued));
+    int initialized=!!(bit & atomic_load(&rumble_initialized));
+#ifdef DM_ANDROID_RUMBLE_D
+    rt_put(&rumble_active_stream,r.time_ns,r.handle,r.raw,
+        (r.handle_ok?1u:0u)|(r.value_ok?2u:0u)|(r.value_valid?4u:0u)|(issued?8u:0u)|(initialized?16u:0u));
+    rd_update(&rumble_d_state,bit,&r,r.value_ok && r.value_valid && issued && initialized);
+#endif
+    pthread_mutex_unlock(&rumble_monitor_lock);
+}
+
+HLE_FORCE("_ZN2nn3hid20IsVibrationPermittedEv", "震动许可；B 虚拟能力，其余不支持（返回 bool）", unsigned, h_hid_VibPermit, void) {
+    unsigned permitted = rumble_mode() >= RP_MODE_B;
+    return permitted;
+}
 HLE_FORCE("_ZN2nn3hid25GetVibrationDeviceHandlesEPNS0_21VibrationDeviceHandleEiRKjNS_4util10BitFlagSetILi32ENS0_12NpadStyleTagEEE",
-          "震动设备；宿主 0 个", int, h_hid_GetVibHandles, void *out, int max, const uint32_t *id, uint32_t style) { (void)out; (void)max; (void)id; (void)style; return 0; }
-HLE_FORCE("_ZN2nn3hid25InitializeVibrationDeviceERKNS0_21VibrationDeviceHandleE", "震动；宿主不支持", void, h_hid_InitVib, const void *h) { (void)h; }
-HLE_FORCE("_ZN2nn3hid18SendVibrationValueERKNS0_21VibrationDeviceHandleERKNS0_14VibrationValueE", "震动；宿主不支持", void, h_hid_SendVib, const void *h, const void *v) { (void)h; (void)v; }
+          "震动设备；仅 B 提供虚拟句柄", int, h_hid_GetVibHandles, void *out, int max, const uint32_t *id, uint32_t style) {
+    int count = 0; uint32_t value, handles[2], connected = connected_id();
+    if (rumble_mode() >= RP_MODE_B && out && !((uintptr_t)out & 3) && max > 0 && id && rumble_read(id, &value, sizeof value)) {
+        int n = rp_virtual_handles(value, style, connected, style_of(connected), max, handles);
+        if ((uintptr_t)out <= UINTPTR_MAX - (unsigned)n * sizeof(uint32_t)) {
+            for (; count < n; count++) {
+                void *slot = (void *)((uintptr_t)out + (unsigned)count * sizeof(uint32_t));
+                if (!rumble_write(slot, &handles[count], sizeof(uint32_t))) break;
+                atomic_fetch_or(&rumble_issued, rumble_bit(handles[count]));
+            }
+        }
+    }
+    return count;
+}
+HLE_FORCE("_ZN2nn3hid25InitializeVibrationDeviceERKNS0_21VibrationDeviceHandleE", "震动；B 仅初始化虚拟句柄", void, h_hid_InitVib, const void *h) {
+    uint32_t handle;
+    if (rumble_mode() >= RP_MODE_B && h && rumble_read(h, &handle, sizeof handle)) {
+        unsigned bit = rumble_bit(handle);
+        if (atomic_load(&rumble_issued) & bit) atomic_fetch_or(&rumble_initialized, bit);
+    }
+}
+HLE_FORCE("_ZN2nn3hid18SendVibrationValueERKNS0_21VibrationDeviceHandleERKNS0_14VibrationValueE", "震动；仅记录，绝无马达输出", void, h_hid_SendVib, const void *h, const void *v) {
+    if (rumble_mode() >= RP_MODE_B) rumble_send_observe(h, v);
+}
 
 // 触屏：nn::hid::TouchScreenState<16> = { int64 sampling; int32 count; int32 _r; TouchState touches[16]（各 0x28） }
 // 内容由 hle_touch.c 按前端推来的触点填（布局与短按锁存见该文件）；游戏只看第 0 份，返回写入的状态份数 1

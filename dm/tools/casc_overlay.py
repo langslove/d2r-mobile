@@ -114,7 +114,7 @@ def read_manifest(source):
 
 def read_data_file(data_dir, ekey, encoded_size):
     chunk, archive = ekey[9], ekey[10]
-    filename = data_dir / f"{chunk:02d}-{archive:08d}.data"
+    filename = data_dir / f"{chunk:02d}-{archive:08x}.data"
     with filename.open("rb") as stream:
         stream.seek(int.from_bytes(ekey[11:16], "big"))
         raw = stream.read(encoded_size)
@@ -158,7 +158,7 @@ def available_location(data_dir):
     used = set()
     for entry in data_dir.glob("??-????????.data"):
         try:
-            used.add((int(entry.name[:2]), int(entry.name[3:11])))
+            used.add((int(entry.name[:2]), int(entry.name[3:11], 16)))
         except ValueError:
             continue
     for chunk in range(256):
@@ -390,7 +390,7 @@ def write_pack(source, output, replacements, location):
     import concurrent.futures as cf
     chunk, archive = location
     data_dir = source / "data"
-    name = f"{chunk:02d}-{archive:08d}.data"
+    name = f"{chunk:02d}-{archive:08x}.data"
     if (data_dir / name).exists():
         die(f"pack location {name} already exists in source RomFS")
     vfs_content = load_vfs1(source)
@@ -505,7 +505,7 @@ def rewrite_tvfs(source, output, replacements, prebuilt=None, link_source=True):
     root[pos:pos + 16] = new_vfs_ekey
     set_cft_sizes(root, pos, new_vfs_encoded, new_vfs_decoded)
     new_root_ekey, new_root_decoded, new_root_encoded = append(bytes(root))
-    data_name = f"{new_chunk:02d}-{new_archive:08d}.data"
+    data_name = f"{new_chunk:02d}-{new_archive:08x}.data"
     (output / "data" / data_name).write_bytes(new_data)
     new_config = replace_config(lines, "vfs-1", hashlib.md5(bytes(vfs_content)).hexdigest() + " " + new_vfs_ekey.hex())
     new_config = replace_config(new_config, "vfs-1-size", f"{new_vfs_decoded} {new_vfs_encoded}")

@@ -95,6 +95,7 @@ list(APPEND ANDROID_SRCS
   ${DM_GEN_DIR}/dm_touch_native_art.c)
 
 add_library(dmcore STATIC ${HOST_SRCS} ${HLE_SRCS} ${GFX_SRCS} ${LIBDEFLATE_SRCS} ${ASM_SRCS} ${ANDROID_SRCS})
+target_compile_definitions(dmcore PRIVATE DM_ANDROID_RUMBLE_D=1)
 list(REMOVE_DUPLICATES HOST_SRCS)
 target_include_directories(dmcore PUBLIC ${HOST} ${DM}/gfx/nvn/include ${CMAKE_CURRENT_SOURCE_DIR}/compat/include ${DM_GEN_DIR})
 target_include_directories(dmcore PUBLIC ${DM}/ios/Sources)

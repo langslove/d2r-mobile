@@ -37,6 +37,57 @@ void dm_padmode_request_glyph(int glyph);
 void front_android_set_window(void *win, int w, int h);
 void front_android_set_refresh(float hz);
 int dm_main(int argc, char **argv);
+#include "../host/dm_rumble_stream.h"
+int dm_rumble_d_mode(void);
+uint64_t dm_rumble_d_claim(void);
+void dm_rumble_d_gate(uint64_t owner,int enabled);
+int dm_rumble_d_poll(uint64_t owner,int64_t out[60]);
+int dm_rumble_shadow_stamp(uint64_t owner,int64_t out[4]);
+unsigned dm_rumble_active_poll(uint64_t owner,int64_t raw[60],int64_t stamp[4],int64_t batch[RT_WORDS]);
+unsigned dm_rumble_active_peek(uint64_t owner,int64_t batch[RT_WORDS]);
+int dm_rumble_active_commit(uint64_t owner,uint64_t epoch,uint64_t first,unsigned count);
+JNIEXPORT jboolean JNICALL Java_com_xiaoboluo_d2r_ControllerRumble_nativeMode(JNIEnv *e,jclass c) {
+    (void)e;(void)c;return dm_rumble_d_mode();
+}
+JNIEXPORT jlong JNICALL Java_com_xiaoboluo_d2r_ControllerRumble_nativeClaim(JNIEnv *e,jclass c) {
+    (void)e;(void)c;return (jlong)dm_rumble_d_claim();
+}
+JNIEXPORT void JNICALL Java_com_xiaoboluo_d2r_ControllerRumble_nativeGate(JNIEnv *e,jclass c,jlong owner,jboolean enabled) {
+    (void)e;(void)c;dm_rumble_d_gate((uint64_t)owner,enabled);
+}
+
+JNIEXPORT jboolean JNICALL Java_com_xiaoboluo_d2r_ControllerRumble_nativePoll(JNIEnv *e,jclass c,jlong owner,jlongArray out) {
+    (void)c;if(!out || (*e)->GetArrayLength(e,out)!=60) return JNI_FALSE;
+    int64_t words[60];if(!dm_rumble_d_poll((uint64_t)owner,words)) return JNI_FALSE;
+    (*e)->SetLongArrayRegion(e,out,0,60,(const jlong *)words);return !(*e)->ExceptionCheck(e);
+}
+JNIEXPORT jboolean JNICALL Java_com_xiaoboluo_d2r_ControllerRumble_nativeStamp(JNIEnv *e,jclass c,jlong owner,jlongArray out) {
+    (void)c;if(!out || (*e)->GetArrayLength(e,out)!=4) return JNI_FALSE;
+    int64_t words[4];if(!dm_rumble_shadow_stamp((uint64_t)owner,words)) return JNI_FALSE;
+    (*e)->SetLongArrayRegion(e,out,0,4,(const jlong *)words);return !(*e)->ExceptionCheck(e);
+}
+JNIEXPORT jboolean JNICALL Java_com_xiaoboluo_d2r_ControllerRumble_nativeRead(JNIEnv *e,jclass c,jlong owner,jlongArray out) {
+    (void)c;if(!out || (*e)->GetArrayLength(e,out)!=RT_WORDS) return JNI_FALSE;
+    int64_t words[RT_WORDS];if(!dm_rumble_active_peek((uint64_t)owner,words)) return JNI_FALSE;
+    (*e)->SetLongArrayRegion(e,out,0,(jsize)(RT_HEADER+words[10]*RT_ROW),(const jlong *)words);
+    if((*e)->ExceptionCheck(e)) return JNI_FALSE;
+    return dm_rumble_active_commit((uint64_t)owner,(uint64_t)words[2],(uint64_t)words[14],(unsigned)words[10])?JNI_TRUE:JNI_FALSE;
+}
+JNIEXPORT jboolean JNICALL Java_com_xiaoboluo_d2r_ControllerRumble_nativeSoftPoll(JNIEnv *e,jclass c,jlong owner,jlongArray raw,jlongArray stamp,jlongArray batch) {
+    (void)c;
+    if(!raw || !stamp || !batch || (*e)->GetArrayLength(e,raw)!=60 || (*e)->GetArrayLength(e,stamp)!=4
+            || (*e)->GetArrayLength(e,batch)!=RT_WORDS) return JNI_FALSE;
+    int64_t r[60],s[4],b[RT_WORDS];if(!dm_rumble_active_poll((uint64_t)owner,r,s,b)) return JNI_FALSE;
+    (*e)->SetLongArrayRegion(e,raw,0,60,(const jlong *)r);
+    if((*e)->ExceptionCheck(e)) return JNI_FALSE;
+    (*e)->SetLongArrayRegion(e,stamp,0,4,(const jlong *)s);
+    if((*e)->ExceptionCheck(e)) return JNI_FALSE;
+    (*e)->SetLongArrayRegion(e,batch,0,(jsize)(RT_HEADER+b[10]*RT_ROW),(const jlong *)b);
+    if((*e)->ExceptionCheck(e)) return JNI_FALSE;
+    return dm_rumble_active_commit((uint64_t)owner,(uint64_t)b[2],(uint64_t)b[14],(unsigned)b[10])?JNI_TRUE:JNI_FALSE;
+}
+
+
 void front_android_boot_failed(int code);
 
 static char g_files[1024], g_ext[1024], g_src[1024], g_runtime[1100];
