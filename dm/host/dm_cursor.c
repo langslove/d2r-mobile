@@ -2782,13 +2782,6 @@ int dm_ui_panel_shown(const char *name) {   // 游戏主线程（界面消息回
 // Find a panel by name: only looks at the direct child widgets of the UI root (PanelManager). Panels are all direct child widgets of the UI root (attached by LoadPanel, detached by UnloadPanel / UnloadAll),
 // so the per-frame question "is a given panel present / open" goes through here rather than ui_find's whole-tree search (when the panel is absent ui_find has to compare the entire tree).
 // Reads from the UI root fresh every time and keeps no widget pointer across frames; may only be called from the game main thread
-#ifdef __ANDROID__
-int dm_ui_frontend_fullscreen(void) {
-    if (atomic_load(&g_load_up) == 1 || dm_ui_panel_shown("LoadScreenPanel")) return 0;
-    return dm_ui_panel_shown("CharacterSelectPanel") || dm_ui_panel_shown("MainMenuButtonRibbon");
-}
-#endif
-
 static uint64_t ui_panel(uint64_t root, const char *name) {
     uint64_t ch = *(uint64_t *)(root + 0x58), n = *(uint64_t *)(root + 0x60); if (!ch || n > 256) return 0;
     for (uint64_t j = 0; j < n; j++) { uint64_t p = *(uint64_t *)(ch + 8 * j); const char *nm = p ? (const char *)*(uint64_t *)(p + 8) : NULL; if (nm && !strcmp(nm, name)) return p; }

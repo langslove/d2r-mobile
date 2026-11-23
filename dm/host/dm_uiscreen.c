@@ -33,7 +33,7 @@ void dm_uiscreen_enable(int m) { atomic_store(&g_mode, m < DM_UISCREEN_OFF || m 
 // In a run / out of a run (the front end pages are designed as whole 16:9 pages - tap areas, titles and the 3D character are one piece - so the whole page is centered with margins; true fullscreen is on only in a run).
 // The single signal: dm_uiscreen_ingame(). Definition = HUDPanel present and the loading screen (LoadScreenPanel) absent, i.e. both ends of the loading screen count as out of a run: on entering, in-run starts from the first frame after the loading screen is removed,
 // and on leaving, out-of-run starts as soon as the loading screen covers the view. It is latched at the per-frame UI site (dm_cursor.c, game main thread), and everywhere in the host and the graphics layer reads only this one value.
-// UI rectangle: centered out of a run, placed as the front end chooses in a run (bottom-aligned). On the front end pages the game itself already renders at 16:9 (see dm_game_res), so UI rectangle = the whole frame; centering is only used in the "loading, already at full-screen resolution" stretch.
+// Android keeps a window-aspect frame and centers the 16:9 UI outside a run. Other platforms still switch the frontend frame to 16:9.
 static _Atomic int g_ingame;
 void (*g_dm_charsel_hook)(void);   // 退出一局回到前端那一刻（diag.c 界面消息 FrontEndNavigation:ToFrontEnd 里调） | The moment of quitting a run back to the front end (called in diag.c's UI message FrontEndNavigation:ToFrontEnd)
 void (*g_dm_ingame_hook)(int on);   // 进局 / 出局那一刻（读取画面也算一次出局）；iOS：cloud_ios.m 拿「进局」记一局开始 | The moment of entering / leaving a run (the loading screen also counts as leaving once); iOS: cloud_ios.m uses "entering a run" to mark the start of a run
@@ -98,32 +98,16 @@ uint64_t front_game_res(int docked); void dm_oe_res_changed(void);
 // 所以在游戏取走 31 的那一刻（hle_oe.c，同一个线程、紧挨着它的比较之前）把真实高写回：同一帧里写回、比较、切换、游戏自己写成新值，中间没有一帧按 4:3 排界面。
 // When handling 31 the game compares the "screen width / height" globals with the new resolution (main+0xe10e10) and does not switch if they are equal. On leaving a run this pair still holds the 16:9 height we wrote, which happens to equal the value to switch to, so the game would think the switch is already done.
 // So at the moment the game takes 31 (hle_oe.c, same thread, right before its comparison) write the real height back: within the same frame come the write-back, comparison, switch, and the game writing the new value itself, with not a single frame laying out the UI at 4:3 in between.
-#ifdef __ANDROID__
-static _Atomic int g_loading_res_pending;
-#endif
-void dm_uiscreen_res_reread(void) {
-#ifdef __ANDROID__
-    // The OE handler has already copied the requested sizes to the game's parameter slots.
-    atomic_store(&g_loading_res_pending, 0);
-#endif
-    uint8_t *b = main_base(); int rw = atomic_load(&g_rw); if (!b || !rw) return; int32_t *g = (int32_t *)(b + 0x211da38);
+void dm_uiscreen_res_reread(void) { uint8_t *b = main_base(); int rw = atomic_load(&g_rw); if (!b || !rw) return; int32_t *g = (int32_t *)(b + 0x211da38);
     if (g[0] == rw && g[1] == atomic_load(&g_uh)) g[1] = atomic_load(&g_rh); atomic_store(&g_rw, 0); }
 // 游戏处理 31 时（main+0xe10df0–0xe10e0c）只接受「宽高都不超过窗口初始化时的尺寸 [main+0x211da30]」的新值：窗口贴图按启动时的参数位一次建好，之后只在里面改出图区域。
 // 所以启动时给屏幕原生值（最大的那个），窗口初始化完、界面每帧那一处第一次跑到时再切到前端的 16:9。
 // When handling 31 (main+0xe10df0–0xe10e0c) the game only accepts new values where "both width and height do not exceed the size at window initialization [main+0x211da30]": the window texture is created once from the startup parameter slot, and afterwards only the render region inside it changes.
 // So give the screen's native value (the largest one) at startup, and switch to the front end's 16:9 once window initialization is done and the per-frame UI site first runs.
-static _Atomic int g_world, g_res_live;
-#ifdef __ANDROID__
-static _Atomic int g_frontend_full;
-int dm_ui_frontend_fullscreen(void);
+static _Atomic int g_res_live;
+#ifndef __ANDROID__
+static _Atomic int g_world;
 #endif
-static int native_output(void) {
-#ifdef __ANDROID__
-    if (atomic_load(&g_loading_res_pending)) return 0;
-    if (atomic_load(&g_frontend_full)) return 1;
-#endif
-    return atomic_load(&g_world);
-}
 int dm_uiscreen_res_live(void) { return atomic_load(&g_res_live); }
 // 游戏对「界面高」有个下限：界面（HUD / 面板）按 720p 设计，写进去的高小于 720 时游戏仍按 720 排版（实测 3.3.94012：
 // 写 684 / 756 / 792 三档，HUD 球心间距依次 481 / 504 / 529 游戏像素 = 0.667×{720, 756, 792}，684 那档被抬成了 720），
@@ -142,37 +126,30 @@ static int ui_floor(int uh, int rh) {
     if (uh > rh) uh = rh;
     return uh;
 }
-uint64_t dm_game_res(int docked) { uint64_t r = front_game_res(docked); uint32_t w = (uint32_t)r, h = (uint32_t)(r >> 32);   // 先问前端：iOS 前端在第一次被问时才决定开不开真全屏 | Ask the front end first: the iOS front end only decides whether to turn on true fullscreen the first time it is asked
-    if (atomic_load(&g_res_live) && mode() != DM_UISCREEN_OFF && !native_output() && (uint64_t)w * 9 < (uint64_t)h * 16) h = (uint32_t)ui_floor((int)(((uint64_t)w * 9 / 16) & ~1u), (int)h);   // 前端页面也受界面高的下限约束：出图高不被压到 720 以下，否则页面底边/右侧溢出（选角页角色栏被切） | front-end pages obey the same UI-height floor: never narrow the picture below 720, or the page overflows (character list cut)
-    return (uint64_t)h << 32 | w; }
+uint64_t dm_game_res(int docked) { uint64_t r = front_game_res(docked);   // 先问前端：iOS 前端在第一次被问时才决定开不开真全屏 | Ask the front end first: the iOS front end only decides whether to turn on true fullscreen the first time it is asked
+#ifdef __ANDROID__
+    // Keep one render size across the Android frontend, loading screen and world.
+    return r;
+#else
+    uint32_t w = (uint32_t)r, h = (uint32_t)(r >> 32);
+    if (atomic_load(&g_res_live) && mode() != DM_UISCREEN_OFF && !atomic_load(&g_world) && (uint64_t)w * 9 < (uint64_t)h * 16) h = (uint32_t)ui_floor((int)(((uint64_t)w * 9 / 16) & ~1u), (int)h);   // 前端页面也受界面高的下限约束：出图高不被压到 720 以下，否则页面底边/右侧溢出（选角页角色栏被切） | front-end pages obey the same UI-height floor: never narrow the picture below 720, or the page overflows (character list cut)
+    return (uint64_t)h << 32 | w;
+#endif
+}
 
 void dm_uiscreen_pump(void) {
     uint8_t *b = main_base(); if (!b) return;
+#ifdef __ANDROID__
+    atomic_store(&g_res_live, 1);
+#else
     { int world = ((uint64_t (*)(uint32_t))(b + 0x45f9d0))(*(uint32_t *)(b + 0x2d20e4c)) != 0;
       int first = !atomic_exchange(&g_res_live, 1);
-      // Track the last published choice even when notification 31 was read between frames.
-      static int was_native;
-      atomic_store(&g_world, world);
-#ifdef __ANDROID__
-      int frontend = !world && mode() != DM_UISCREEN_OFF && dm_ui_frontend_fullscreen();
-      int leaving_frontend = atomic_exchange(&g_frontend_full, frontend) && !frontend;
-      if (mode() == DM_UISCREEN_OFF || frontend) atomic_store(&g_loading_res_pending, 0);
-      else if (leaving_frontend) {
-          // Notification 31 coalesces. Keep the loading size until the guest reads it,
-          // even if the player already exists by the time the guest polls the queue.
-          atomic_store(&g_loading_res_pending, 1);
-      }
+      if ((atomic_exchange(&g_world, world) != world || (first && !world)) && mode() != DM_UISCREEN_OFF) { LOG("界面画面：%s → 游戏分辨率切到 %u x %u", world ? "玩家单位建立" : first ? "窗口已建好、在前端" : "玩家单位销毁", (unsigned)dm_game_res(1), (unsigned)(dm_game_res(1) >> 32)); dm_oe_res_changed(); } }
 #endif
-      int native = native_output();
-      if ((was_native != native || (first && !native)) && mode() != DM_UISCREEN_OFF) {
-          uint64_t res = dm_game_res(1);
-          LOG("Render resolution: %s -> %u x %u", native ? (world ? "world" : "fullscreen frontend") : "letterboxed frontend/loading",
-              (unsigned)res, (unsigned)(res >> 32));
-          dm_oe_res_changed();
-      }
-      was_native = native; }
     static int reg; if (!reg) { reg = 1; if (gate_obs_present(OBS_UI_PROJECT)) { gate_obs_set(OBS_UI_PROJECT, ui_project_obs); atomic_store(&g_proj_on, 1); } } int32_t *g = (int32_t *)(b + 0x211da38); int m = mode(), rw = atomic_load(&g_rw);
+#ifndef __ANDROID__
     if (!atomic_load(&g_world) && m != DM_UISCREEN_OFF) return;   // 不在局里：游戏自己按 16:9 出图，这对量不改写（出局那一下的写回见 dm_uiscreen_res_reread） | Not in a run: the game renders at 16:9 by itself, so this pair of values is not rewritten (for the write-back at the moment of leaving a run see dm_uiscreen_res_reread)
+#endif
     if (m == DM_UISCREEN_OFF) { if (rw) { if (g[0] == rw && g[1] == atomic_load(&g_uh)) g[1] = atomic_load(&g_rh); atomic_store(&g_rw, 0); LOG("界面画面：关掉，屏幕高写回 %d", g[1]); } return; }   // 没打开过就什么都不碰 | If it was never turned on, touch nothing
     int w = g[0], h = g[1]; if (w <= 0 || h <= 0) return;
     if (rw && w == rw && h == atomic_load(&g_uh)) return;   // 还是我们上次写的值 | Still the value we wrote last time

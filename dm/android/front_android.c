@@ -214,7 +214,7 @@ void front_android_view_rect(int win_w, int win_h, int out[4]) {
                whole overlay (self-drawn HUD and buttons) moves right by the same difference: touches follow the view origin, and
                world_rect adds -vr_x back, leaving world taps untouched. On 16:9 and wider it works out to 0 and nothing changes. */
             float hu = (float)vh / 1320.0f; int shift = (int)lroundf(1173.6f * hu - (float)win_w * 0.5f);
-            if (shift > 0) out[0] = shift; }
+            if (dm_uiscreen_ingame() && shift > 0) out[0] = shift; }
         else if (!dm_uiscreen_ingame() && rw > 0 && rh > 0) {
             double scale = fmin((double)win_w / rw, (double)win_h / rh);
             out[2] = (int)lround(rw * scale);
