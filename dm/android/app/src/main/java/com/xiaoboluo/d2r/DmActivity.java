@@ -100,7 +100,7 @@ public class DmActivity extends Activity implements SurfaceHolder.Callback, Disp
     private CamThreats camThreats;
     private RumbleDController rumbleD;
     private void resumeRumbleBridge() {
-        if (!BuildConfig.DEBUG || !started || !resumed) return;
+        if (!started || !resumed) return;
         try {
             if (rumbleD == null && ControllerRumble.nativeMode()) rumbleD = new ControllerRumble(this);
             if (rumbleD != null) rumbleD.resume();
