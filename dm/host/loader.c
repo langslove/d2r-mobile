@@ -405,6 +405,17 @@ static void map_image(module_t *m, const char *dir) {
     m->size = (sz + 0x3FFF) & ~0x3FFFull;
     m->base = mmap(NULL, m->size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (m->base == MAP_FAILED) die("%s mmap", m->name);
+    if (!strcmp(m->name, "main")) {
+        const size_t off = 0x2b12dc;
+        uint32_t comparison, original;
+        if (sz < off + sizeof original) die("rumble patch: image too small");
+        memcpy(&comparison, raw + off - 4, sizeof comparison);
+        memcpy(&original, raw + off, sizeof original);
+        if (comparison != 0x710142df || original != 0x1a9f07e2)
+            die("rumble patch: selector instruction mismatch");
+        const uint32_t forced_one = 0x52800022;
+        memcpy(raw + off, &forced_one, sizeof forced_one);
+    }
     memcpy(m->base, raw, sz); free(raw); install_key_page(m);
     uint64_t rx = (m->text_end + 0x3FFF) & ~0x3FFFull;
     if (mprotect(m->base, rx, PROT_READ | PROT_EXEC)) die("%s mprotect text", m->name);

@@ -351,6 +351,20 @@ public class DmActivity extends Activity implements SurfaceHolder.Callback, Disp
             // Same rule as jni_android.c's choice of runtime directory: internal storage when it has the main module, otherwise external private storage
             File ext = getExternalFilesDir(null), internal = new File(getFilesDir(), "dm");
             File runtime = new File(internal, "out/main.patched.bin").canRead() || ext == null ? internal : new File(ext, "dm");
+            try (java.io.InputStream stream = new java.io.FileInputStream(new File(runtime, "out/main.patched.bin"))) {
+                java.security.MessageDigest sha = java.security.MessageDigest.getInstance("SHA-256");
+                byte[] buffer = new byte[65536];
+                for (int count; (count = stream.read(buffer)) != -1;) sha.update(buffer, 0, count);
+                StringBuilder hash = new StringBuilder();
+                for (byte value : sha.digest()) hash.append(String.format(java.util.Locale.ROOT, "%02x", value & 255));
+                if (!hash.toString().equals("976ced41d8ecae391937d35a577ed044aac1668f6a4043e0b71f83c0549bbd27")) {
+                    showStartError("Rumble patch: main image SHA-256 mismatch");
+                    return;
+                }
+            } catch (java.io.IOException | java.security.GeneralSecurityException error) {
+                showStartError("Rumble patch: main image verification failed");
+                return;
+            }
             try { Os.setenv("DM_DERIVED", new File(runtime, "derived.tsv").getAbsolutePath(), true); } catch (ErrnoException e) { showStartError(getString(R.string.dmAndroidStorage)); return; }
             try { System.loadLibrary("dm"); libraryLoaded = true; }
             catch (UnsatisfiedLinkError error) { showStartError(getString(R.string.dmAndroidLibrary)); return; }
