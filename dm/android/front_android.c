@@ -215,7 +215,13 @@ void front_android_view_rect(int win_w, int win_h, int out[4]) {
                world_rect adds -vr_x back, leaving world taps untouched. On 16:9 and wider it works out to 0 and nothing changes. */
             float hu = (float)vh / 1320.0f; int shift = (int)lroundf(1173.6f * hu - (float)win_w * 0.5f);
             if (shift > 0) out[0] = shift; }
-        else if (rw > 0 && rh > 0 && (double)rw * 9 > (double)rh * 16) { vh = (int)lround((double)win_w * rh / rw); vy = (win_h - vh) / 2; }
+        else if (!dm_uiscreen_ingame() && rw > 0 && rh > 0) {
+            double scale = fmin((double)win_w / rw, (double)win_h / rh);
+            out[2] = (int)lround(rw * scale);
+            out[0] = (win_w - out[2]) / 2;
+            vh = (int)lround(rh * scale);
+            vy = (win_h - vh) / 2;
+        }
         out[1] = vy; out[3] = vh; return;
     }
     uint64_t r = front_game_res(1); double gw = (double)(uint32_t)r, gh = (double)(r >> 32);

@@ -105,6 +105,16 @@ void dm_uiscreen_res_reread(void) { uint8_t *b = main_base(); int rw = atomic_lo
 // When handling 31 (main+0xe10df0–0xe10e0c) the game only accepts new values where "both width and height do not exceed the size at window initialization [main+0x211da30]": the window texture is created once from the startup parameter slot, and afterwards only the render region inside it changes.
 // So give the screen's native value (the largest one) at startup, and switch to the front end's 16:9 once window initialization is done and the per-frame UI site first runs.
 static _Atomic int g_world, g_res_live;
+#ifdef __ANDROID__
+static _Atomic int g_frontend_full;
+int dm_ui_frontend_fullscreen(void);
+#endif
+static int native_output(void) {
+#ifdef __ANDROID__
+    if (atomic_load(&g_frontend_full)) return 1;
+#endif
+    return atomic_load(&g_world);
+}
 int dm_uiscreen_res_live(void) { return atomic_load(&g_res_live); }
 // 游戏对「界面高」有个下限：界面（HUD / 面板）按 720p 设计，写进去的高小于 720 时游戏仍按 720 排版（实测 3.3.94012：
 // 写 684 / 756 / 792 三档，HUD 球心间距依次 481 / 504 / 529 游戏像素 = 0.667×{720, 756, 792}，684 那档被抬成了 720），
@@ -124,14 +134,25 @@ static int ui_floor(int uh, int rh) {
     return uh;
 }
 uint64_t dm_game_res(int docked) { uint64_t r = front_game_res(docked); uint32_t w = (uint32_t)r, h = (uint32_t)(r >> 32);   // 先问前端：iOS 前端在第一次被问时才决定开不开真全屏 | Ask the front end first: the iOS front end only decides whether to turn on true fullscreen the first time it is asked
-    if (atomic_load(&g_res_live) && mode() != DM_UISCREEN_OFF && !atomic_load(&g_world) && (uint64_t)w * 9 < (uint64_t)h * 16) h = (uint32_t)ui_floor((int)(((uint64_t)w * 9 / 16) & ~1u), (int)h);   // 前端页面也受界面高的下限约束：出图高不被压到 720 以下，否则页面底边/右侧溢出（选角页角色栏被切） | front-end pages obey the same UI-height floor: never narrow the picture below 720, or the page overflows (character list cut)
+    if (atomic_load(&g_res_live) && mode() != DM_UISCREEN_OFF && !native_output() && (uint64_t)w * 9 < (uint64_t)h * 16) h = (uint32_t)ui_floor((int)(((uint64_t)w * 9 / 16) & ~1u), (int)h);   // 前端页面也受界面高的下限约束：出图高不被压到 720 以下，否则页面底边/右侧溢出（选角页角色栏被切） | front-end pages obey the same UI-height floor: never narrow the picture below 720, or the page overflows (character list cut)
     return (uint64_t)h << 32 | w; }
 
 void dm_uiscreen_pump(void) {
     uint8_t *b = main_base(); if (!b) return;
     { int world = ((uint64_t (*)(uint32_t))(b + 0x45f9d0))(*(uint32_t *)(b + 0x2d20e4c)) != 0;
       int first = !atomic_exchange(&g_res_live, 1);
-      if ((atomic_exchange(&g_world, world) != world || (first && !world)) && mode() != DM_UISCREEN_OFF) { LOG("界面画面：%s → 游戏分辨率切到 %u x %u", world ? "玩家单位建立" : first ? "窗口已建好、在前端" : "玩家单位销毁", (unsigned)dm_game_res(1), (unsigned)(dm_game_res(1) >> 32)); dm_oe_res_changed(); } }
+      int was_native = native_output();
+      atomic_store(&g_world, world);
+#ifdef __ANDROID__
+      atomic_store(&g_frontend_full, !world && mode() != DM_UISCREEN_OFF && dm_ui_frontend_fullscreen());
+#endif
+      int native = native_output();
+      if ((was_native != native || (first && !native)) && mode() != DM_UISCREEN_OFF) {
+          uint64_t res = dm_game_res(1);
+          LOG("Render resolution: %s -> %u x %u", world ? "world" : native ? "fullscreen frontend" : "letterboxed frontend/loading",
+              (unsigned)res, (unsigned)(res >> 32));
+          dm_oe_res_changed();
+      } }
     static int reg; if (!reg) { reg = 1; if (gate_obs_present(OBS_UI_PROJECT)) { gate_obs_set(OBS_UI_PROJECT, ui_project_obs); atomic_store(&g_proj_on, 1); } } int32_t *g = (int32_t *)(b + 0x211da38); int m = mode(), rw = atomic_load(&g_rw);
     if (!atomic_load(&g_world) && m != DM_UISCREEN_OFF) return;   // 不在局里：游戏自己按 16:9 出图，这对量不改写（出局那一下的写回见 dm_uiscreen_res_reread） | Not in a run: the game renders at 16:9 by itself, so this pair of values is not rewritten (for the write-back at the moment of leaving a run see dm_uiscreen_res_reread)
     if (m == DM_UISCREEN_OFF) { if (rw) { if (g[0] == rw && g[1] == atomic_load(&g_uh)) g[1] = atomic_load(&g_rh); atomic_store(&g_rw, 0); LOG("界面画面：关掉，屏幕高写回 %d", g[1]); } return; }   // 没打开过就什么都不碰 | If it was never turned on, touch nothing
