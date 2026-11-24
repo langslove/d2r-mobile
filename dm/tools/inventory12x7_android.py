@@ -1,4 +1,4 @@
-﻿"""Build the isolated Android 84-cell experiment from a baseline runtime pack."""
+"""Build the isolated Android 84-cell experiment from a baseline runtime pack."""
 import argparse
 import hashlib
 import json
@@ -103,23 +103,34 @@ def background(stock):
     original = resource(stock / "data", next(row for row in entries(stock) if row[0] == path))
     lib = art.lib()
     base = art.decode(lib, original)
-    # Use a stock 49-pixel cell and the stock coin plate. Sprite coordinates are half layout units.
-    cell = base.crop((10, 447, 59, 496))
-    fill = base.crop((20, 460, 40, 480))
+    cell = base.crop((9, 425, 58, 474))
     canvas = Image.new("RGBA", (700, 724))
-    for y in range(0, 724, 20):
-        for x in range(0, 700, 20):
-            canvas.paste(fill, (x, y))
     for row in range(7):
         for col in range(12):
             canvas.paste(cell, (57 + col * 49, 299 + row * 49))
-    for name, rect in RECTS.items():
-        if name.startswith("slot_"):
-            x,y,w,h = rect
-            canvas.paste(cell.resize((w//2,h//2)), (x//2,y//2))
+
+    # Crop each stock frame separately so its border scales with the correct slot shape.
+    frames = {
+        "slot_head": (199, 0, 309, 112),
+        "slot_neck": (320, 81, 382, 145),
+        "slot_torso": (199, 112, 310, 273),
+        "slot_right_arm": (7, 65, 119, 274),
+        "slot_left_arm": (392, 64, 503, 274),
+        "slot_right_hand": (125, 272, 188, 336),
+        "slot_left_hand": (321, 272, 384, 335),
+        "slot_belt": (198, 272, 310, 336),
+        "slot_feet": (392, 273, 502, 383),
+        "slot_gloves": (7, 273, 119, 383),
+    }
+    for name, crop in frames.items():
+        x, y, width, height = RECTS[name]
+        frame = base.crop(crop).resize((width // 2, height // 2), Image.Resampling.LANCZOS)
+        canvas.paste(frame, (x // 2, y // 2))
+
+    potion_frame = base.crop((127, 351, 190, 411))
     for col in range(4):
-        canvas.paste(cell, (226 + col * 64, 243))
-    canvas.paste(base.crop((152,628,352,692)), (270,655))
+        canvas.paste(potion_frame, (226 + col * 64, 243))
+
     return art.pack(lib, original, art.bc3(canvas), 700, 724, 700)
 
 def build(stock, baseline, output):
@@ -178,7 +189,7 @@ def build(stock, baseline, output):
         fingerprint = marker.read_text(encoding="utf8").splitlines()[0].split()[1]
         overlay_contract.write_manifest(target, fingerprint)
     marker = output / "pack_info.txt"
-    marker.write_text(marker.read_text(encoding="utf8") + "EXPERIMENT=inventory12x7\n",encoding="utf8")
+    marker.write_text(marker.read_text(encoding="utf8") + "EXPERIMENT=inventory12x7-art2\n",encoding="utf8")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
