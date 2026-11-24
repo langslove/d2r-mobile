@@ -1,4 +1,4 @@
-"""Build the isolated Android 84-cell experiment from a baseline runtime pack."""
+"""Build the Android 84-cell release overlay from a baseline runtime pack."""
 import argparse
 import hashlib
 import json
@@ -192,7 +192,7 @@ def build(stock, baseline, output):
         fingerprint = marker.read_text(encoding="utf8").splitlines()[0].split()[1]
         overlay_contract.write_manifest(target, fingerprint)
     marker = output / "pack_info.txt"
-    marker.write_text(marker.read_text(encoding="utf8") + "EXPERIMENT=inventory12x7-art3\n",encoding="utf8")
+    marker.write_text(marker.read_text(encoding="utf8") + "INVENTORY_LAYOUT=12x7-c\n",encoding="utf8")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
