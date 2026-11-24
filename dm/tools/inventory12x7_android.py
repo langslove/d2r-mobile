@@ -186,5 +186,3 @@ if __name__ == "__main__":
         parser.add_argument(name,type=Path)
     args = parser.parse_args()
     build(args.stock_romfs,args.baseline_pack,args.output)
-
-
