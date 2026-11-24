@@ -343,8 +343,9 @@ public class DmActivity extends Activity implements SurfaceHolder.Callback, Disp
         if (bootFailure != 0) { showBootFailure(); return; }
         if (started || importing || !resumed || !ensureFileAccess()) return;
         File downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-        if (!libraryLoaded && !savesTransferred) { savesTransferred = true; transferSaves(new File(downloads, "S2X/D2R Mobile")); }
-        if (!libraryLoaded && !ensureImported(new File(downloads, "S2X/D2R Mobile/android"))) return;
+        boolean inventoryExperiment = getPackageName().equals("com.xiaoboluo.d2r.inventory12x7");
+        if (!inventoryExperiment && !libraryLoaded && !savesTransferred) { savesTransferred = true; transferSaves(new File(downloads, "S2X/D2R Mobile")); }
+        if (!libraryLoaded && !ensureImported(new File(downloads, inventoryExperiment ? "S2X/D2R Inventory 12x7/android" : "S2X/D2R Mobile/android"))) return;
         if (gameFrame.getParent() == null) setContentView(gameFrame);
         if (!libraryLoaded) {
             // 与 jni_android.c 选运行目录同一条规则：内部目录有主程序就用内部目录，否则用外部私有目录
