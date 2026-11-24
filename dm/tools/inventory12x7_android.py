@@ -103,35 +103,38 @@ def background(stock):
     original = resource(stock / "data", next(row for row in entries(stock) if row[0] == path))
     lib = art.lib()
     base = art.decode(lib, original)
+    # These are frame-local pixel bounds, measured from the aligned 644x712 frame.
+    # The layout anchor and widget coordinates belong to a different origin.
+    canvas = Image.new("RGBA", (644, 712))
     cell = base.crop((9, 425, 58, 474))
-    canvas = Image.new("RGBA", (700, 724))
     for row in range(7):
         for col in range(12):
-            canvas.paste(cell, (57 + col * 49, 299 + row * 49))
+            canvas.paste(cell, (28 + col * 49, 290 + row * 49))
 
-    # Crop each stock frame separately so its border scales with the correct slot shape.
-    frames = {
-        "slot_head": (199, 0, 309, 112),
-        "slot_neck": (320, 81, 382, 145),
-        "slot_torso": (199, 112, 310, 273),
-        "slot_right_arm": (7, 65, 119, 274),
-        "slot_left_arm": (392, 64, 503, 274),
-        "slot_right_hand": (125, 272, 188, 336),
-        "slot_left_hand": (321, 272, 384, 335),
-        "slot_belt": (198, 272, 310, 336),
-        "slot_feet": (392, 273, 502, 383),
-        "slot_gloves": (7, 273, 119, 383),
-    }
-    for name, crop in frames.items():
-        x, y, width, height = RECTS[name]
-        frame = base.crop(crop).resize((width // 2, height // 2), Image.Resampling.LANCZOS)
-        canvas.paste(frame, (x // 2, y // 2))
+    frames = (
+        ((199, 0, 309, 112), (137, 7, 250, 116)),       # Head
+        ((320, 81, 382, 145), (423, 7, 481, 65)),       # Amulet
+        ((199, 112, 310, 273), (267, 7, 380, 167)),    # Torso
+        ((7, 65, 119, 274), (7, 25, 120, 231)),        # Weapon
+        ((392, 64, 503, 274), (527, 25, 639, 231)),    # Off hand
+        ((125, 272, 188, 336), (393, 65, 451, 122)),   # Ring
+        ((321, 272, 384, 335), (452, 65, 513, 122)),   # Ring
+        ((198, 272, 310, 336), (267, 167, 380, 232)),  # Belt equipment
+        ((392, 273, 502, 383), (393, 122, 512, 228)),  # Boots
+        ((7, 273, 119, 383), (137, 116, 250, 228)),    # Gloves
+        ((159, 626, 351, 687), (228, 639, 421, 699)),  # Gold plate
+    )
+    potion = (127, 351, 190, 411)
+    potion_frames = tuple((potion, (left, 232, right, 289))
+                          for left, right in ((198, 259), (263, 325), (325, 387), (391, 452)))
+    for crop, (left, top, right, bottom) in frames + potion_frames:
+        frame = base.crop(crop)
+        opaque = frame.getchannel("A").point(lambda value: 255 if value >= 128 else 0)
+        frame = frame.crop(opaque.getbbox())
+        frame = frame.resize((right - left, bottom - top), Image.Resampling.LANCZOS)
+        canvas.paste(frame, (left, top))
+    return art.pack(lib, original, art.bc3(canvas), 644, 712, 644)
 
-    potion_frame = base.crop((127, 351, 190, 411))
-    for col in range(4):
-        canvas.paste(potion_frame, (226 + col * 64, 243))
-
-    return art.pack(lib, original, art.bc3(canvas), 700, 724, 700)
 
 def build(stock, baseline, output):
     shutil.copytree(baseline, output)
@@ -189,7 +192,7 @@ def build(stock, baseline, output):
         fingerprint = marker.read_text(encoding="utf8").splitlines()[0].split()[1]
         overlay_contract.write_manifest(target, fingerprint)
     marker = output / "pack_info.txt"
-    marker.write_text(marker.read_text(encoding="utf8") + "EXPERIMENT=inventory12x7-art2\n",encoding="utf8")
+    marker.write_text(marker.read_text(encoding="utf8") + "EXPERIMENT=inventory12x7-art3\n",encoding="utf8")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
