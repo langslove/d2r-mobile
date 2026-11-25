@@ -39,6 +39,15 @@ final class PadInput {
         boolean lt, rt;       // 扳机轴（部分手柄 L2/R2 只报轴不报键） | trigger axes (some pads report L2/R2 as axes only)
         boolean hatL, hatR, hatU, hatD;   // 十字键走 AXIS_HAT 的手柄 | pads that report the d-pad through AXIS_HAT
         int glyph = GLYPH_PAD;
+        final boolean[] triggerKeys;
+
+        State(InputDevice device) {
+            // Use AYANEO's digital trigger reports where available. Mixing in the axis
+            // can create a second press or extend the key release.
+            boolean ayaneo = device != null && "AYANEO".equals(ControllerIdentity.mode(
+                    device.getName(), device.getVendorId(), device.getProductId(), device.getDescriptor()));
+            triggerKeys = ayaneo ? device.hasKeys(KeyEvent.KEYCODE_BUTTON_L2, KeyEvent.KEYCODE_BUTTON_R2) : null;
+        }
     }
 
     private static final Map<Integer, State> pads = new HashMap<>();
@@ -80,8 +89,8 @@ final class PadInput {
         s.ry = -axis(e.getAxisValue(MotionEvent.AXIS_RZ));
         float lt = Math.max(e.getAxisValue(MotionEvent.AXIS_LTRIGGER), e.getAxisValue(MotionEvent.AXIS_BRAKE));
         float rt = Math.max(e.getAxisValue(MotionEvent.AXIS_RTRIGGER), e.getAxisValue(MotionEvent.AXIS_GAS));
-        s.lt = lt > TRIGGER;
-        s.rt = rt > TRIGGER;
+        s.lt = (s.triggerKeys == null || !s.triggerKeys[0]) && lt > TRIGGER;
+        s.rt = (s.triggerKeys == null || !s.triggerKeys[1]) && rt > TRIGGER;
 
         float hx = e.getAxisValue(MotionEvent.AXIS_HAT_X), hy = e.getAxisValue(MotionEvent.AXIS_HAT_Y);
         boolean hl = hx < -TRIGGER, hr = hx > TRIGGER, hu = hy < -TRIGGER, hd = hy > TRIGGER;
@@ -139,7 +148,7 @@ final class PadInput {
 
     private static State state(int id) {
         State s = pads.get(id);
-        if (s == null) { s = new State(); pads.put(id, s); }
+        if (s == null) { s = new State(InputDevice.getDevice(id)); pads.put(id, s); }
         return s;
     }
 
